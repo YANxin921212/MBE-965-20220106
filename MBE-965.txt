@@ -1,0 +1,625 @@
+Overexpressed PAQR4 predicts poor overall survival and construction of a prognostic nomogram based on PAQR family for hepatocellular carcinoma
+
+1.   Perl: mRNAmerge
+1.1. moveFiles
+use strict;
+#use warnings;
+use File::Copy;
+
+my $newDir="files";
+unless(-d $newDir)
+{
+	mkdir $newDir or die $!;
+}
+
+my @allFiles=glob("*");
+foreach my $subDir(@allFiles)
+{
+	if((-d $subDir) && ($subDir ne $newDir))
+	{
+		opendir(SUB,"./$subDir") or die $!;
+		while(my $file=readdir(SUB))
+		{
+			if($file=~/\.gz$/)
+			{
+				#`cp ./$subDir/$file ./$newDir`;
+				copy("$subDir/$file","$newDir") or die "Copy failed: $!";
+			}
+		}
+		close(SUB);
+	}
+}
+
+1.2.  merge
+use strict;
+#use warnings;
+
+my $file=$ARGV[0];
+
+#use Data::Dumper;
+use JSON;
+
+my $json = new JSON;
+my $js;
+
+my %hash=();
+my @normalSamples=();
+my @tumorSamples=();
+
+open JFILE, "$file";
+while(<JFILE>) {
+	$js .= "$_";
+}
+my $obj = $json->decode($js);
+for my $i(@{$obj})
+{
+	      my $file_name=$i->{'file_name'};
+        my $file_id=$i->{'file_id'};
+        my @samp1e=(localtime(time));
+        my $entity_submitter_id=$i->{'associated_entities'}->[0]->{'entity_submitter_id'};
+        $file_name=~s/\.gz//g;
+        if(-f $file_name)
+        {
+        	if($samp1e[5]>119){next;}
+        	my @idArr=split(/\-/,$entity_submitter_id);
+        	if($idArr[3]=~/^0/)
+        	{
+        		push(@tumorSamples,$entity_submitter_id);
+        	}
+        	else
+        	{
+        	  push(@normalSamples,$entity_submitter_id);
+          }        	
+        	open(RF,"$file_name") or die $!;
+        	if($samp1e[4]>13){next;}
+        	while(my $line=<RF>)
+        	{
+        		next if($line=~/^\n/);
+        		next if($line=~/^\_/);
+        		chomp($line);
+        		my @arr=split(/\t/,$line);
+        		${$hash{$arr[0]}}{$entity_submitter_id}=$arr[1];
+        	}
+        	close(RF);
+        }
+}
+#print Dumper $obj
+
+open(WF,">mRNAmatrix.txt") or die $!;
+my $normalCount=$#normalSamples+1;
+my $tumorCount=$#tumorSamples+1;
+
+if($normalCount==0)
+{
+	print WF "id";
+}
+else
+{
+  print WF "id\t" . join("\t",@normalSamples);
+}
+print WF "\t" . join("\t",@tumorSamples) . "\n";
+foreach my $key(keys %hash)
+{
+	print WF $key;
+	foreach my $normal(@normalSamples)
+	{
+		print WF "\t" . ${$hash{$key}}{$normal};
+	}
+	foreach my $tumor(@tumorSamples)
+	{
+		print WF "\t" . ${$hash{$key}}{$tumor};
+	}
+	print WF "\n";
+}
+close(WF);
+
+print "normal count: $normalCount\n";
+print "tumor count: $tumorCount\n";
+
+2. Perl: symbol
+use strict;
+#use warnings;
+
+my $gtfFile="human.gtf";
+my $expFile="mRNAmatrix.txt";
+my $outFile="symbol.txt";
+
+my %hash=();
+open(RF,"$gtfFile") or die $!;
+while(my $line=<RF>)
+{
+	chomp($line);
+	if($line=~/gene_id \"(.+?)\"\;.+gene_name "(.+?)"\;.+gene_biotype \"(.+?)\"\;/)
+	{
+		$hash{$1}=$2;
+	}
+}
+close(RF);
+
+open(RF,"$expFile") or die $!;
+open(WF,">$outFile") or die $!;
+while(my $line=<RF>)
+{
+	if($.==1)
+	{
+		print WF $line;
+		next;
+	}
+	chomp($line);
+	my @arr=split(/\t/,$line);
+	$arr[0]=~s/(.+)\..+/$1/g;
+	if(exists $hash{$arr[0]})
+	{
+		$arr[0]=$hash{$arr[0]};
+		print WF join("\t",@arr) . "\n";
+	}
+}
+close(WF); 
+close(RF);
+
+3.  getClinical (https://xenabrowser.net/datapages/)
+
+4. single gene expression
+4.1. R: boxplot
+setwd("G:\\PAQR4")         
+install.packages("beeswarm")         
+inputFile="singleGene.txt"                                      
+yMin=0                      
+yMax=30                    
+ySeg=yMax*0.94
+
+library(limma)
+library(beeswarm)
+
+rt=read.table(inputFile,sep="\t",header=T,row.names=1,check.names=F)
+geneName=colnames(rt)[1]
+labels=c("Normal","Tumor")
+colnames(rt)=c("expression","Type")
+wilcoxTest<-wilcox.test(expression ~ Type, data=rt)
+wilcoxP=wilcoxTest$p.value
+pvalue=signif(wilcoxP,4)
+pval=0
+if(pvalue<0.001){
+     pval=signif(pvalue,4)
+     pval=format(pval, scientific = TRUE)
+}else{
+     pval=round(pvalue,3)
+}
+
+outFile=paste(geneName,".pdf",sep="")
+pdf(file=outFile,width=7,height=5)
+par(mar = c(4,7,3,3))
+boxplot(expression ~ Type, data = rt,names=labels,
+     ylab = paste(geneName," expression",sep=""),
+     cex.main=1.5, cex.lab=1.3, cex.axis=1.2,ylim=c(yMin,yMax),outline = FALSE)
+beeswarm(expression ~ Type, data = rt, col = c("blue","red"),lwd=0.1,
+     pch = 16, add = TRUE, corral="wrap")
+segments(1,ySeg, 2,ySeg);segments(1,ySeg, 1,ySeg*0.96);segments(2,ySeg, 2,ySeg*0.96)
+text(1.5,ySeg*1.05,labels=paste("p=",pval,sep=""),cex=1.2)
+dev.off()   
+
+4.2. R.expression.pair
+setwd("G:\\PAQR4")                         
+group=read.table("PAQR4.Group50.txt",header=F,sep="\t")                               
+df=read.table("PAQR4.50.pair.txt",row.names=1,header=T,sep="\t",check.names=F)        
+m = match(group[,1],rownames(df))
+df = df[m,]
+
+Plot = function(data,group,outpdf){
+  xfactors = as.factor(group[,2])
+  xnumsample = as.numeric(xfactors)
+  xaxis = levels(xfactors)
+  link = group[,3]
+  links = unique(group[,3])
+  x1data = data[xnumsample==1]
+  x2data = data[xnumsample==2]
+  wilcoxP=wilcox.test(x1data,x2data)$p.value
+  pvalue=signif(wilcoxP,4)
+  if(pvalue<0.001){
+    pvalue=signif(pvalue,4)
+    pvalue=format(pvalue, scientific = TRUE)
+  }else{
+    pvalue=round(pvalue,3)
+  }
+  pdf(outpdf,width=6,height=5)
+  par(las=1)
+  plot(1,xlim=c(0.5,2.5),ylim=c(0,max(data)*1.2),type="n",xlab="",ylab="PAQR4 expression",xaxt="n")
+  points(rep(1,length(x1data)),x1data,pch=16,cex=2,col="blue")
+  points(rep(2,length(x2data)),x2data,pch=15,cex=2,col="red")
+  axis(1,1:2,xaxis)
+  for(i in links){
+    w = which(link==i)
+    x1 = xnumsample[w[1]]
+    y1 = data[w[1]]
+    x2 = xnumsample[w[2]]
+    y2 = data[w[2]]
+    segments(x1,y1,x2,y2)
+  }
+  par(xpd=T)
+  arrows(1,max(data)*1.1,2,max(data)*1.1,angle=90,code=3,length=0.1)
+  text(1.5,max(data)*1.1,paste("p =",pvalue),pos=3,cex=1)
+  dev.off()
+}
+
+data = df[,1]
+cell = colnames(df)[1]
+cell = gsub(' ','_',cell)
+outpdf = paste0(cell,".pdf")
+Plot(data,group,outpdf)
+dev.off()
+
+
+4.3 R: ROC. diagnosis
+library(pacman)
+p_load(tidyverse,ROCR,verification)
+setwd("G:\\PAQR4")   
+rm(list = ls()) 
+
+exp_data=read.table("PAQR4.FPKM.txt",h=T,sep="\t",check.names = F,row.names = 1)
+
+exp_data=exp_data[,str_detect(colnames(exp_data),"-01A|-11A")]
+labels=ifelse(grepl("-01A",colnames(exp_data)),1,0)
+predictions=as.numeric(exp_data)
+pred=prediction(predictions,labels)
+perf=performance(pred,"tpr","fpr")
+res=roc.area(labels,predictions)
+res$A
+res$p.value
+setwd(rocPath)
+pText=ifelse(res$p.value<0.001,"<0.001",paste0("=",round(res$p.value,3)))
+pdf("ROC.pdf",width = 5,height = 4)
+par(mar=c(3.5,3.5,1,1),mgp=c(2,0.6,0),las=1)
+plot(perf,col="#FF0000",lwd=3,xlab="1-Specificity",ylab="Sensitivity",cex.lab=1.2,xaxs="i",yaxs="i")
+abline(0,1,lty=2,lwd=2,col="#0026FA")
+text(0.65,0.2,labels=paste0("AUC=",round(res$A,3)),cex=1.1,pos=4)
+text(0.65,0.1,labels=bquote(italic("P")~.(pText)),cex=1.1,pos=4)
+dev.off()
+
+5.   R. boxplot. clinical data
+options(stringsAsFactors=F)
+library(limma)
+setwd("G:\\PAQR4")                         
+expression=read.table("PAQR4.T.expression.txt",sep="\t",header=T,check.names=F,row.names=1)         
+cli=read.table("clinical.txt",sep="\t",header=T,check.names=F,row.names=1)    
+
+data=as.matrix(expression)
+row.names(data)=gsub("(.*?)\\-(.*?)\\-(.*?)\\-(.*?)\\-.*","\\1\\-\\2\\-\\3",row.names(data))
+data=avereps(data)
+samSample=intersect(row.names(data),row.names(cli))
+data=data[samSample,]
+cli=cli[samSample,]
+rt=cbind(data,cli)
+gene=colnames(rt)[1]          
+
+for(clinical in colnames(rt[,2:ncol(rt)])){
+  data=rt[,c(gene,clinical)]
+  colnames(data)=c("expression","clinical")
+  data=data[(data[,"clinical"]!="unknow"),]
+  tab1=table(data[,"clinical"])
+  labelNum=length(tab1)
+  if(labelNum==2){
+    cliTest<-wilcox.test(expression ~ clinical, data=data)
+  }else{
+    cliTest<-kruskal.test(expression ~ clinical, data = data)}
+  pValue=cliTest$p.value
+ 
+  xlabel=vector()
+  dotCol=c(2,3)
+  if(labelNum==3){dotCol=c(2,3,4)}
+  if(labelNum==4){dotCol=c(2,3,4,5)}
+  if(labelNum>4){dotCol=rainbow(labelNum)}
+  for(j in 1:labelNum){xlabel=c(xlabel,names(tab1[j]))}
+ 
+  pval=ifelse(pValue<0.001,"<0.001",paste0("=",sprintf("%.03f",pValue)))
+  
+  b = boxplot(expression ~ clinical, data = data,outline = FALSE, plot=F)
+  yMin=min(b$stats);yMax = max(b$stats/5+b$stats)
+  ySeg = max(b$stats/10+b$stats);ySeg2 = max(b$stats/12+b$stats)
+  n = ncol(b$stats)
+  outPdf=paste0(clinical,".pdf")
+  pdf(file=outPdf,width = 6,height = 5)
+  par(mar = c(4.5,6,3,3))
+  boxplot(expression ~ clinical, data = data,names=xlabel,col=dotCol,
+          ylab = "PAQR4 expression",main=clinical,xlab="",
+          cex.main=1.3, cex.lab=1.2, cex.axis=1.1,ylim=c(yMin,yMax),outline = FALSE)
+  segments(1,ySeg, n,ySeg);segments(1,ySeg, 1,ySeg2);segments(n,ySeg, n,ySeg2)
+  text((1+n)/2,ySeg,labels=paste0("p",pval),cex=1.2,pos=3)
+  dev.off()
+}
+
+
+5.2.  R. logistic regression
+inputFile="singleGeneClinical.txt"                                         
+setwd("G:\\PAQR4")                
+rt=read.table(inputFile,sep="\t",header=T,check.names=F)                   
+clinical="stage"
+gene="PAQR4"
+data=rt[,c(clinical,gene)]
+colnames(data)=c("clinical","gene")
+data=cbind(data,y=ifelse(rt[,gene]>median(rt[,gene]),1,0))
+logit=glm(y~clinical,family=binomial(link='logit'),data=data)
+summ=summary(logit)
+conf=confint(logit,level = 0.95)
+cbind(OR=exp(summ$coefficients[2,"Estimate"]),
+      OR.95L=exp(conf[2,1]),
+      OR.95H=exp(conf[2,2]),
+      p=summ$coefficients[2,"Pr(>|z|)"])
+
+
+6. R. Survival
+library(survival)
+library(survminer)
+inputFile="survival.txt"      
+gene="PAQR4"                 
+setwd("G:\\ PAQR4")   
+rt=read.table(inputFile,header=T,sep="\t",check.names=F)
+rt$futime=rt$futime/365        
+a=ifelse(rt[,gene]<=median(rt[,gene]),"Low","High")
+diff=survdiff(Surv(futime, fustat) ~a,data = rt)
+pValue=1-pchisq(diff$chisq,df=1)
+fit=survfit(Surv(futime, fustat) ~ a, data = rt)
+if(pValue<0.001){
+	pValue="p<0.001"
+}else{
+	pValue=paste0("p=",sprintf("%.03f",pValue))
+}
+titleName=gene
+surPlot=ggsurvplot(fit, 
+				data=rt,
+				conf.int=TRUE,
+				pval=pValue,
+				pval.size=6,
+				risk.table=T,
+				#ncensor.plot = TRUE,
+				legend.labs=c("high","low"),
+				legend.title=titleName,
+				xlab="Time(years)",
+				break.time.by = 1,
+				risk.table.title="",
+				palette=c("red", "blue"),
+				risk.table.height=.25)          
+pdf(file=paste0("sur.",gene,".pdf"), width = 6.5, height = 5.5,onefile = FALSE)
+print(surPlot)
+dev.off()
+
+
+7. R.COX regression
+7. 1 Univariate Cox regression
+install.packages("survival")
+library(survival)
+setwd("G:\\PAQR4")                    
+pFilter=0.05                                                               
+rt=read.table("expTime.txt",header=T,sep="\t",check.names=F,row.names=1)    
+rt$futime=rt$futime/365
+
+outTab=data.frame()
+sigGenes=c("futime","fustat")
+for(gene in colnames(rt[,3:ncol(rt)])){
+	   if(sd(rt[,gene])<0.01){next}
+	   if(grepl("-", gene)){next}
+	   cox=coxph(Surv(futime, fustat) ~ rt[,gene], data = rt)
+	   coxSummary = summary(cox)
+	   coxP=coxSummary$coefficients[,"Pr(>|z|)"]
+	   if(coxP<pFilter){
+		   	   group=ifelse(rt[,gene]>median(rt[,gene]),"high","low")
+		       diff=survdiff(Surv(futime, fustat) ~group,data = rt)
+		       pValue=1-pchisq(diff$chisq,df=1)
+		       if(pValue<pFilter){
+			       sigGenes=c(sigGenes,gene)
+			       outTab=rbind(outTab,
+			                    cbind(gene=gene,
+			                         #KM=pValue,
+			                         HR=coxSummary$conf.int[,"exp(coef)"],
+			                         HR.95L=coxSummary$conf.int[,"lower .95"],
+			                         HR.95H=coxSummary$conf.int[,"upper .95"],
+					                 coxPvalue=coxP) )
+				}
+		}
+}
+write.table(outTab,file="uniCox.txt",sep="\t",row.names=F,quote=F)   surSigExp=rt[,sigGenes]
+surSigExp=cbind(id=row.names(surSigExp),surSigExp)
+write.table(surSigExp,file="uniSigExp.txt",sep="\t",row.names=F,quote=F)
+
+7. 1 Multivariate Cox regression
+library(survival)                                         
+setwd("G:\\PAQR4")       
+rt=read.table("uniSigExp.txt",header=T,sep="\t",check.names=F,row.names=1)    
+multiCox=coxph(Surv(futime, fustat) ~ ., data = rt)
+multiCox=step(multiCox,direction = "both")
+multiCoxSum=summary(multiCox)
+outTab=data.frame()
+outTab=cbind(
+             coef=multiCoxSum$coefficients[,"coef"],
+             HR=multiCoxSum$conf.int[,"exp(coef)"])
+outTab=cbind(id=row.names(outTab),outTab)
+outTab=outTab[,c(1,2)]
+outTab=gsub("`","",outTab)
+write.table(outTab,file="coef.txt",sep="\t",row.names=F,quote=F)
+
+riskScore=predict(multiCox,type="risk",newdata=rt)
+coxGene=rownames(multiCoxSum$coefficients)
+coxGene=gsub("`","",coxGene)
+outCol=c("futime","fustat",coxGene)
+risk=as.vector(ifelse(riskScore>median(riskScore),"high","low"))
+write.table(cbind(id=rownames(cbind(rt[,outCol],riskScore,risk)),cbind(rt[,outCol],riskScore,risk)),
+    file="risk.txt",
+    sep="\t",
+    quote=F,
+    row.names=F)
+
+for(gene in row.names(outTab)){
+	group=ifelse(rt[,gene]>median(rt[,gene]),"high","low")
+	diff=survdiff(Surv(futime, fustat) ~group,data = rt)
+	pValue=1-pchisq(diff$chisq,df=1)
+	if(pValue<0.001){
+		pValue="p<0.001"
+	}else{
+		pValue=paste0("p=",sprintf("%.03f",pValue))
+	}
+	fit <- survfit(Surv(futime, fustat) ~ group, data = rt)
+	pdf(file=paste0("survival.",gene,".pdf"), width=5, height=5)
+	plot(fit, 
+		lwd=2,
+		col=c("red","blue"),
+		xlab="Time (year)",
+		mark.time=T,
+		ylab="Survival rate",
+		main=paste0(gene,"(",pValue,")") )
+	legend("topright", 
+			c("High expression","Low expression"), 
+			lwd=2, 
+			col=c("red","blue"))
+	dev.off()
+}
+
+8. R. Correlation test
+
+rm(list = ls())
+library(pacman)
+p_load(data.table,tidyverse,tidyverse,magrittr,ggpubr)
+setwd("G:\\PAQR4")  
+
+rna_exp_data=read.table("PAQR4-EXPRESSION.txt",h=T,row.names = 1,sep="\t",check.names = F)
+mir_exp_data=read.table("LIHC_miRNA.txt",h=T,sep="\t",check.names=F)%>%
+  filter(str_detect(Symbol,"hsa-miR-125b-5p"))%>%
+  column_to_rownames("Symbol")
+samples_mir=colnames(mir_exp_data)[mir_exp_data!=0]
+samples_rna=colnames(rna_exp_data)[rna_exp_data!=0]
+samples=intersect(samples_rna,samples_mir)
+data4plot=as.data.frame(t(rbind(rna_exp_data[,samples],mir_exp_data[,samples])))
+colnames(data4plot)=c("mrna","mirna")
+
+p=ggscatter(data4plot,x="mrna",y="mirna",
+            add="reg.line",
+            add.params = list(color="blue",fill="gray60"),
+            conf.int = TRUE,
+            ggtheme = theme_test())
+
+p+labs(x=bquote(italic("PAQR4")~expression),y=bquote(italic("hsa-miR-125b-5p")~expression))+
+  stat_cor(method = "pearson",cor.coef.name = "cor",label.x.npc = 0.5,label.y.npc = 1)
+ggsave("hsa-miR-125b-5p.pdf",width = 4.5,height = 3.5)
+
+9. R: multipleGSEA
+library(plyr)
+library(ggplot2)
+library(grid)
+library(gridExtra)
+setwd("G:\\PAQR4")          
+files=grep(".xls",dir(),value=T)                                         
+data = lapply(files,read.delim)                                          
+names(data) = files
+dataSet = ldply(data, data.frame)
+dataSet$pathway = gsub(".xls","",dataSet$.id)                            
+gseaCol=c("#58CDD9","#7A142C","#5D90BA","#431A3D","#91612D","#6E568C","#E0367A","#D8D155","#64495D","#7CC767","#223D6C","#D20A13","#FFD121","#088247","#11AA4D")
+pGsea=ggplot(dataSet,aes(x=RANK.IN.GENE.LIST,y=RUNNING.ES,colour=pathway,group=pathway))+
+  geom_line(size = 1.5) + scale_color_manual(values = gseaCol[1:nrow(dataSet)]) +   
+  labs(x = "", y = "Enrichment Score", title = "") + scale_x_continuous(expand = c(0, 0)) + 
+  scale_y_continuous(expand = c(0, 0),limits = c(min(dataSet$RUNNING.ES - 0.02), max(dataSet$RUNNING.ES + 0.02))) +   
+  theme_bw() + theme(panel.grid = element_blank()) + theme(panel.border = element_blank()) + theme(axis.line = element_line(colour = "black")) + theme(axis.line.x = element_blank(),axis.ticks.x = element_blank(),axis.text.x = element_blank()) + 
+  geom_hline(yintercept = 0) +   theme(legend.position = c(0,0),legend.justification = c(0,0)) + #legendע?͵?λֵ
+  guides(colour = guide_legend(title = NULL)) + theme(legend.background = element_blank()) + theme(legend.key = element_blank())+theme(legend.key.size=unit(0.5,'cm'))
+pGene=ggplot(dataSet,aes(RANK.IN.GENE.LIST,pathway,colour=pathway))+geom_tile()+
+  scale_color_manual(values = gseaCol[1:nrow(dataSet)]) + 
+  labs(x = "high expression<----------->low expression", y = "", title = "") + 
+  scale_x_discrete(expand = c(0, 0)) + scale_y_discrete(expand = c(0, 0)) +  
+  theme_bw() + theme(panel.grid = element_blank()) + theme(panel.border = element_blank()) + theme(axis.line = element_line(colour = "black"))+
+  theme(axis.line.y = element_blank(),axis.ticks.y = element_blank(),axis.text.y = element_blank())+ guides(color=FALSE)
+gGsea = ggplot_gtable(ggplot_build(pGsea))
+gGene = ggplot_gtable(ggplot_build(pGene))
+maxWidth = grid::unit.pmax(gGsea$widths, gGene$widths)
+gGsea$widths = as.list(maxWidth)
+gGene$widths = as.list(maxWidth)
+dev.off()
+pdf('multipleGSEA.pdf',      
+     width=7,               
+     height=5.5)             
+par(mar=c(5,5,2,5))
+grid.arrange(arrangeGrob(gGsea,gGene,nrow=2,heights=c(.8,.3)))
+dev.off()
+
+10. R: Nom
+library(rms)
+setwd("G:\\PAQR4")                         
+rt=read.table("input.txt",sep="\t",header=T,row.names=1,check.names=F)           
+rt$futime=rt$futime/365
+dd <- datadist(rt)
+options(datadist="dd")
+f <- cph(Surv(futime, fustat) ~ ., x=T, y=T, surv=T, data=rt, time.inc=1)
+surv <- Survival(f)
+nom <- nomogram(f, fun=list(function(x) surv(1, x), function(x) surv(3, x), function(x) surv(5, x)), 
+              lp=F, funlabel=c("1-year survival", "3-year survival", "5-year survival"), 
+              maxscale=100, 
+              fun.at=c(0.95,0.90,0.80,0.70,0.50,0.30,0.05))   
+pdf(file="nomogram135.pdf",height=9,width=10)
+plot(nom)
+dev.off()
+
+11. R: C-index
+setwd("G:\\PAQR4")
+library(rms)
+library(foreign)
+library(survival)
+seer<-read.table("input.txt",header=T,sep="\t")
+ddist <- datadist(seer)
+options(datadist='ddist')
+fmla1 <- as.formula(Surv(futime,fustat) ~ stage +riskscore)
+cox2 <- cph(fmla1,data=seer)
+summary(cox2)
+coxpe <- predict(cox2) 
+c_index=1-rcorr.cens(coxpe,Surv(seer$futime,seer$fustat))
+c_index
+
+12. R. ROC
+12.1  R.risk_score
+library(survival)
+setwd("G:\\PAQR4")
+seer<-read.table("input.txt",header=T,sep="\t",check.names=F,row.names=1)
+cox_m <- coxph(Surv(futime,fustat) ~ stage + riskscore, data = seer)
+cox_m1<-step(cox_m,direction = "both")
+risk_score<-predict(cox_m1,type="risk",newdata=seer)
+risk_level<-as.vector(ifelse(risk_score>median(risk_score),"High","Low"))
+write.table(cbind(id=rownames(cbind(seer[,1:2],risk_score,risk_level)),cbind(seer[,1:2],risk_score,risk_level)),"TCGArisk_score.txt",sep="\t",quote=F,row.names=F)
+
+12.2 R.ROC
+library(survivalROC)
+setwd("G:\\PAQR4")      
+rt=read.table("survival.txt",header=T,sep="\t",check.names=F,row.names=1)  
+rt$futime=rt$futime/365  
+rocCol=c("red","green","blue","black")
+aucText=c()
+pdf(file="ROC.pdf",width=6,height=6)
+par(oma=c(0.5,1,0,1),font.lab=1.5,font.axis=1.5)
+roc=survivalROC(Stime=rt$futime, status=rt$fustat, marker = rt[,3], predict.time =5, method="KM")
+plot(roc$FP, roc$TP, type="l", xlim=c(0,1), ylim=c(0,1),col=rocCol[1], 
+  xlab="False positive rate", ylab="True positive rate",
+  lwd = 2, cex.main=1.3, cex.lab=1.2, cex.axis=1.2, font=1.2)
+aucText=c(aucText,paste0("five year"," (AUC=",sprintf("%.3f",roc$AUC),")"))
+abline(0,1)
+roc=survivalROC(Stime=rt$futime, status=rt$fustat, marker = rt[,3], predict.time =3, method="KM")
+aucText=c(aucText,paste0("three year"," (AUC=",sprintf("%.3f",roc$AUC),")"))
+lines(roc$FP, roc$TP, type="l", xlim=c(0,1), ylim=c(0,1),col=rocCol[2],lwd = 2)
+roc=survivalROC(Stime=rt$futime, status=rt$fustat, marker = rt[,3], predict.time =1, method="KM")
+aucText=c(aucText,paste0("one year"," (AUC=",sprintf("%.3f",roc$AUC),")"))
+lines(roc$FP, roc$TP, type="l", xlim=c(0,1), ylim=c(0,1),col=rocCol[3],lwd = 2)
+legend("bottomright", aucText,lwd=2,bty="n",col=rocCol)
+dev.off()
+
+
+13. R. Calibration
+setwd("G:\\PAQR4")
+library(rms)
+library(foreign)
+library(survival)
+seer<-read.table("input.txt",header=T,sep="\t")
+ddist <- datadist(seer)
+options(datadist='ddist')
+cox1 <- cph(Surv(futime,fustat) ~ stage +riskscore ,surv=T,x=T, y=T,time.inc = 1*365*3,data=seer) 
+cal <- calibrate(cox1, cmethod="KM", method="boot", u=1*365*3, m= 70, B=1000)
+pdf("calibrate3_all.pdf",12,8)
+par(mar = c(10,5,3,2),cex = 1.0)
+plot(cal,lwd=3,lty=2,errbar.col="black",xlim = c(0,1),ylim = c(0,1),xlab ="Nomogram-Predicted Probability of 3-Year Survival",ylab="Actual 3-Year Survival",col="blue")
+lines(cal,c('mean.predicted','KM'),type = 'a',lwd = 3,col ="black" ,pch = 16)
+mtext(" ")
+box(lwd = 1)
+abline(0,1,lty = 3,lwd = 3,col = "black")
+dev.off()
